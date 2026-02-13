@@ -638,6 +638,17 @@ class JsonlSubprocessRunner(BaseRunner):
 
             rc: int | None = None
             stream = JsonlStreamState(expected_session=resume)
+            stderr_tail: list[str] = []
+
+            def remember_stderr(line: str) -> None:
+                text = line.strip()
+                if not text:
+                    return
+                stderr_tail.append(text)
+                if len(stderr_tail) > 3:
+                    del stderr_tail[:-3]
+                if hasattr(state, "stderr_tail"):
+                    state.stderr_tail = tuple(stderr_tail)
 
             async with anyio.create_task_group() as tg:
                 tg.start_soon(
@@ -645,6 +656,7 @@ class JsonlSubprocessRunner(BaseRunner):
                     proc.stderr,
                     logger,
                     tag,
+                    remember_stderr,
                 )
                 async for evt in self._iter_jsonl_events(
                     stdout=proc.stdout,

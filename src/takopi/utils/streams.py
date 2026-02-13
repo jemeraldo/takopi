@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
+from contextlib import suppress
 import sys
 from typing import Any
 
@@ -25,10 +26,14 @@ async def drain_stderr(
     stream: ByteReceiveStream,
     logger: Any,
     tag: str,
+    on_line: Callable[[str], None] | None = None,
 ) -> None:
     try:
         async for line in iter_bytes_lines(stream):
             text = line.decode("utf-8", errors="replace")
+            if on_line is not None:
+                with suppress(Exception):
+                    on_line(text)
             log_pipeline(
                 logger,
                 "subprocess.stderr",

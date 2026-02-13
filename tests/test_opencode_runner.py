@@ -95,6 +95,39 @@ def test_translate_missing_reason_success() -> None:
     assert completed.answer == "All done."
 
 
+def test_stream_end_reports_non_terminal_reason() -> None:
+    runner = OpenCodeRunner(opencode_cmd="opencode")
+    state = OpenCodeStreamState(
+        saw_step_finish=True,
+        last_step_reason="tool-calls",
+    )
+    token = ResumeToken(engine=ENGINE, value="ses_test")
+
+    events = runner.stream_end_events(resume=None, found_session=token, state=state)
+
+    completed = next(evt for evt in events if isinstance(evt, CompletedEvent))
+    assert completed.ok is False
+    assert completed.error is not None
+    assert "without terminal stop event" in completed.error
+    assert "last_step_reason=tool-calls" in completed.error
+
+
+def test_stream_end_reports_empty_output_with_stop_reason() -> None:
+    runner = OpenCodeRunner(opencode_cmd="opencode")
+    state = OpenCodeStreamState(
+        saw_step_finish=True,
+        last_step_reason="stop",
+    )
+    token = ResumeToken(engine=ENGINE, value="ses_test")
+
+    events = runner.stream_end_events(resume=None, found_session=token, state=state)
+
+    completed = next(evt for evt in events if isinstance(evt, CompletedEvent))
+    assert completed.ok is False
+    assert completed.error is not None
+    assert "no output text" in completed.error
+
+
 def test_translate_accumulates_text() -> None:
     state = OpenCodeStreamState()
 

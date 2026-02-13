@@ -227,7 +227,7 @@ class ProgressEdits:
             self.signal_send.send_nowait(None)
         except anyio.WouldBlock:
             pass
-        except (anyio.BrokenResourceError, anyio.ClosedResourceError):
+        except anyio.BrokenResourceError, anyio.ClosedResourceError:
             pass
 
 
@@ -569,9 +569,16 @@ async def handle_message(
         else:
             final_answer = str(run_error)
 
-    status = (
-        "error" if run_ok is False else ("done" if final_answer.strip() else "error")
-    )
+    status_reason = "ok"
+    if run_ok is False:
+        status_reason = "runner_error"
+    elif not final_answer.strip():
+        status_reason = "empty_answer"
+        inferred_error = run_error or f"{completed.engine} returned no output"
+        run_error = inferred_error
+        final_answer = inferred_error
+
+    status = "done" if status_reason == "ok" else "error"
     resume_value = None
     resume_token = completed.resume or outcome.resume
     if resume_token is not None:
@@ -584,6 +591,7 @@ async def handle_message(
         elapsed_s=round(elapsed, 2),
         action_count=progress_tracker.action_count,
         resume=resume_value,
+        status_reason=status_reason,
     )
     sync_resume_token(progress_tracker, completed.resume or outcome.resume)
     state = progress_tracker.snapshot(

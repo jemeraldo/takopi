@@ -58,6 +58,25 @@ class OpenCodeStreamState:
     session_id: str | None = None
     emitted_started: bool = False
     saw_step_finish: bool = False
+    last_step_reason: str | None = None
+    decode_error_count: int = 0
+    invalid_json_count: int = 0
+    stderr_tail: tuple[str, ...] = ()
+
+
+def _diagnostics_suffix(state: OpenCodeStreamState) -> str:
+    details: list[str] = []
+    if state.last_step_reason:
+        details.append(f"last_step_reason={state.last_step_reason}")
+    if state.decode_error_count:
+        details.append(f"decode_errors={state.decode_error_count}")
+    if state.invalid_json_count:
+        details.append(f"invalid_json={state.invalid_json_count}")
+    if state.stderr_tail:
+        details.append(f"stderr_tail={state.stderr_tail[-1][:200]}")
+    if not details:
+        return ""
+    return f" ({'; '.join(details)})"
 
 
 def _action_event(
@@ -248,6 +267,8 @@ def translate_opencode_event(
             part = part or {}
             reason = part.get("reason")
             state.saw_step_finish = True
+            if isinstance(reason, str) and reason:
+                state.last_step_reason = reason
 
             if reason == "stop":
                 resume = None
@@ -368,6 +389,7 @@ class OpenCodeRunner(ResumeTokenMixin, JsonlSubprocessRunner):
         line: str,
         state: OpenCodeStreamState,
     ) -> list[TakopiEvent]:
+        state.invalid_json_count += 1
         message = "invalid JSON from opencode; ignoring line"
         return [self.note_event(message, state=state, detail={"line": raw})]
 
@@ -397,6 +419,7 @@ class OpenCodeRunner(ResumeTokenMixin, JsonlSubprocessRunner):
         state: OpenCodeStreamState,
     ) -> list[TakopiEvent]:
         if isinstance(error, msgspec.DecodeError):
+            state.decode_error_count += 1
             self.get_logger().warning(
                 "jsonl.msgspec.invalid",
                 tag=self.tag(),
@@ -445,6 +468,7 @@ class OpenCodeRunner(ResumeTokenMixin, JsonlSubprocessRunner):
     ) -> list[TakopiEvent]:
         if not found_session:
             message = "opencode finished but no session_id was captured"
+            message = f"{message}{_diagnostics_suffix(state)}"
             resume_for_completed = resume
             return [
                 CompletedEvent(
@@ -457,6 +481,33 @@ class OpenCodeRunner(ResumeTokenMixin, JsonlSubprocessRunner):
             ]
 
         if state.saw_step_finish:
+            if state.last_step_reason not in {None, "stop"}:
+                message = (
+                    "opencode finished without terminal stop event"
+                    f"{_diagnostics_suffix(state)}"
+                )
+                return [
+                    CompletedEvent(
+                        engine=ENGINE,
+                        ok=False,
+                        answer=state.last_text or "",
+                        resume=found_session,
+                        error=message,
+                    )
+                ]
+            if not (state.last_text or "").strip():
+                message = (
+                    f"opencode returned no output text{_diagnostics_suffix(state)}"
+                )
+                return [
+                    CompletedEvent(
+                        engine=ENGINE,
+                        ok=False,
+                        answer="",
+                        resume=found_session,
+                        error=message,
+                    )
+                ]
             return [
                 CompletedEvent(
                     engine=ENGINE,
@@ -466,7 +517,9 @@ class OpenCodeRunner(ResumeTokenMixin, JsonlSubprocessRunner):
                 )
             ]
 
-        message = "opencode finished without a result event"
+        message = (
+            f"opencode finished without a result event{_diagnostics_suffix(state)}"
+        )
         return [
             CompletedEvent(
                 engine=ENGINE,
